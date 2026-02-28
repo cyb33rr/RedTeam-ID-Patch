@@ -7,7 +7,7 @@ name = "redteam-id-patch"
 version = "1.0.0"
 description = "RedTeam ID Patch — replaces forensic artifacts in Impacket & NetExec with your team identifier"
 readme = "README.md"
-license = "MIT"
+license = "Apache-2.0"
 requires-python = ">=3.9"
 keywords = ["redteam", "impacket", "netexec", "patcher", "identifier"]
 

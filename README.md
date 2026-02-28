@@ -9,7 +9,7 @@ Monkey-patch hook that replaces all random/hardcoded forensic identifiers in **I
 pip install .
 
 # Or directly from GitHub:
-pip install git+https://github.com/<user>/redteam-id-patch.git
+pip install git+https://github.com/cyb33rr/RedTeam-ID-Patch.git
 ```
 
 ## Usage
