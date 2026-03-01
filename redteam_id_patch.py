@@ -138,8 +138,11 @@ def _patch_nxc_misc(mod):
     if not hasattr(mod, 'gen_random_string'):
         return False
     def _ident_gen(length=10):
+        caller_file = os.path.basename(sys._getframe(1).f_code.co_filename)
+        if caller_file in _PASSTHROUGH_FILES:
+            return ''.join(_orig_choice(string.ascii_letters) for _ in range(length))
         _ensure_confirmed()
-        return IDENT  # always full string, ignore length
+        return IDENT
     mod.gen_random_string = _ident_gen
     return True
 
