@@ -35,8 +35,8 @@ On startup you'll see:
 
 | Tool / Module | Artifact | Default Value | Patched To |
 |---|---|---|---|
-| **Impacket (general)** | `random.choice(ascii_letters)` filenames | Random 8-char string | `RTID` |
-| **Impacket (general)** | `random.sample(ascii_letters, k)` filenames | Random k-char string | `RTID` |
+| **Impacket (artifacts)** | `random.choice(ascii_letters)` filenames | Random 8-char string | `RTID` |
+| **Impacket (artifacts)** | `random.sample(ascii_letters, k)` filenames | Random k-char string | `RTID` |
 | **wmiexec.py** | `OUTPUT_FILENAME` (via `time.time()`) | Epoch timestamp | `RTID` |
 | **dcomexec.py** | `OUTPUT_FILENAME` | Random `__` + 5 chars | `__` + `RTID` |
 | **psexec.py** | `RemComSTDOUT/IN/ERR` pipe names | `RemCom_stdout` etc. | `RTID_stdout` etc. |
@@ -44,6 +44,8 @@ On startup you'll see:
 | **secretsdump.py** | `__output` temp file | `__output` | `RTID` |
 | **secretsdump.py** | `execute.bat` batch file | `execute.bat` | `RTID.bat` |
 | **NetExec** | `gen_random_string()` | Random string | `RTID` |
+
+The `random.choice`/`random.sample` hooks only fire for **artifact-creating** code (temp files, service names, AD objects). Network-level identifiers (SMB3 ClientGuid, TDS HostName/AppName, SMB server config) are left untouched so they don't create unnecessary fingerprints in packet captures.
 
 ## Supported Tools
 

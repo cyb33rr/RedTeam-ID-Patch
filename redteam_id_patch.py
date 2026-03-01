@@ -28,6 +28,15 @@ _confirmed = not _using_default  # explicit RTID needs no confirmation
 if _using_default:
     IDENT = 'RedTeaming'
 
+# Modules whose random.choice/sample calls are network-level (not on-disk artifacts)
+_PASSTHROUGH_FILES = frozenset({
+    'smb3.py',          # ClientGuid
+    'tds.py',           # TDS HostName/AppName
+    'smbserver.py',     # server config fields
+    'smbrelayserver.py',# ServerGuid
+    'smb.py',           # nxc smb_share_name at import time
+})
+
 
 def _ensure_confirmed():
     """Prompt once for default-ident confirmation, only when patching fires."""
@@ -51,7 +60,9 @@ _orig_choice = random.choice
 
 def _hooked_choice(population):
     if population is string.ascii_letters or population == string.ascii_letters:
-        _ensure_confirmed()
+        caller_file = os.path.basename(sys._getframe(1).f_code.co_filename)
+        if caller_file in _PASSTHROUGH_FILES:
+            return _orig_choice(population)
         frame = sys._getframe(1)
         idx = frame.f_locals.get('i', frame.f_locals.get('_', None))
         if isinstance(idx, int):
@@ -68,7 +79,9 @@ _orig_sample = random.sample
 
 def _hooked_sample(population, k, *args, **kwargs):
     if population is string.ascii_letters or population == string.ascii_letters:
-        _ensure_confirmed()
+        caller_file = os.path.basename(sys._getframe(1).f_code.co_filename)
+        if caller_file in _PASSTHROUGH_FILES:
+            return _orig_sample(population, k, *args, **kwargs)
         if k <= 0:
             return []
         return [IDENT] + [''] * (k - 1)
