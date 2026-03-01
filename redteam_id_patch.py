@@ -22,8 +22,19 @@ import builtins
 import functools
 
 IDENT = os.environ.get('RTID', '')
-if not IDENT:
+_using_default = not IDENT
+_confirmed = not _using_default  # explicit RTID needs no confirmation
+
+if _using_default:
     IDENT = 'RedTeaming'
+
+
+def _ensure_confirmed():
+    """Prompt once for default-ident confirmation, only when patching fires."""
+    global _confirmed
+    if _confirmed:
+        return
+    _confirmed = True  # before prompt to prevent re-entry
     print(f"[RT-ID] WARNING: RTID not set.", file=sys.stderr)
     try:
         resp = input(f"[RT-ID] Continue with default ident '{IDENT}'? [Y/n] ")
@@ -31,7 +42,8 @@ if not IDENT:
             print("[RT-ID] Aborted. Set RTID and retry.", file=sys.stderr)
             sys.exit(1)
     except Exception:
-        pass  # Non-interactive or replaced stdin — proceed with default
+        pass  # Non-interactive — proceed with default
+    print(f"[RT-ID] Active: ident={IDENT}", file=sys.stderr)
 
 # ── Hook 1: random.choice ────────────────────────────────────────────
 _orig_choice = random.choice
@@ -39,6 +51,7 @@ _orig_choice = random.choice
 
 def _hooked_choice(population):
     if population is string.ascii_letters or population == string.ascii_letters:
+        _ensure_confirmed()
         frame = sys._getframe(1)
         idx = frame.f_locals.get('i', frame.f_locals.get('_', None))
         if isinstance(idx, int):
@@ -55,6 +68,7 @@ _orig_sample = random.sample
 
 def _hooked_sample(population, k, *args, **kwargs):
     if population is string.ascii_letters or population == string.ascii_letters:
+        _ensure_confirmed()
         if k <= 0:
             return []
         return [IDENT] + [''] * (k - 1)
@@ -73,8 +87,10 @@ if _script == 'wmiexec.py':
     class _IdentTime(float):
         """Float subclass whose str()/repr() returns the ident string."""
         def __str__(self):
+            _ensure_confirmed()
             return IDENT
         def __repr__(self):
+            _ensure_confirmed()
             return IDENT
 
     _time_mod.time = lambda: _IdentTime(_orig_time())
@@ -93,6 +109,7 @@ def _patch_secretsdump(mod):
 
     @functools.wraps(_orig_init)
     def _patched_init(self, *a, **kw):
+        _ensure_confirmed()
         _orig_init(self, *a, **kw)
         self._RemoteOperations__batchFile = '%TEMP%\\' + IDENT + '.bat'
         self._RemoteOperations__output = '%SYSTEMROOT%\\Temp\\' + IDENT
@@ -108,6 +125,7 @@ def _patch_nxc_misc(mod):
     if not hasattr(mod, 'gen_random_string'):
         return False
     def _ident_gen(length=10):
+        _ensure_confirmed()
         return IDENT  # always full string, ignore length
     mod.gen_random_string = _ident_gen
     return True
@@ -139,6 +157,7 @@ def _master_import(name, *args, **kwargs):
     if not _psexec_done:
         m = sys.modules.get('__main__')
         if m and hasattr(m, 'RemComSTDOUT'):
+            _ensure_confirmed()
             m.RemComSTDOUT = IDENT + '_stdout'
             m.RemComSTDIN = IDENT + '_stdin'
             m.RemComSTDERR = IDENT + '_stderr'
@@ -158,6 +177,7 @@ def _master_import(name, *args, **kwargs):
     if not _dcomexec_done:
         m = sys.modules.get('__main__')
         if m and hasattr(m, 'OUTPUT_FILENAME'):
+            _ensure_confirmed()
             m.OUTPUT_FILENAME = '__' + IDENT
             _dcomexec_done = True
 
@@ -181,4 +201,5 @@ except NameError:
     pass
 
 # ── Startup banner ────────────────────────────────────────────────────
-print(f"[RT-ID] Active: ident={IDENT}", file=sys.stderr)
+if not _using_default:
+    print(f"[RT-ID] Active: ident={IDENT}", file=sys.stderr)
