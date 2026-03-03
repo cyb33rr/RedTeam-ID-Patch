@@ -37,15 +37,18 @@ On startup you'll see:
 |---|---|---|---|
 | **Impacket (artifacts)** | `random.choice(ascii_letters)` filenames | Random 8-char string | `RTID` |
 | **Impacket (artifacts)** | `random.sample(ascii_letters, k)` filenames | Random k-char string | `RTID` |
-| **wmiexec.py** | `OUTPUT_FILENAME` (via `time.time()`) | Epoch timestamp | `RTID` |
-| **dcomexec.py** | `OUTPUT_FILENAME` | Random `__` + 5 chars | `__` + `RTID` |
+| **wmiexec.py** | `OUTPUT_FILENAME` | `__` + epoch timestamp | `__` + `RTID` |
+| **dcomexec.py** | `OUTPUT_FILENAME` | `__` + 5 random chars | `__` + `RTID` |
+| **smbexec.py** | `OUTPUT_FILENAME` | `__output` | `RTID` |
+| **smbexec.py** | Service name, batch file | Random 8-char string | `RTID` |
+| **atexec.py** | Temp file name | Random 8-char string | `RTID` |
 | **psexec.py** | `RemComSTDOUT/IN/ERR` pipe names | `RemCom_stdout` etc. | `RTID_stdout` etc. |
 | **psexec.py** | `RemCom_communicaton` pipe | Hardcoded string | `RTID_comm` |
-| **secretsdump.py** | `__output` temp file | `__output` | `RTID` |
+| **secretsdump.py** | `__output` temp file + SMB paths | `__output` | `RTID` |
 | **secretsdump.py** | `execute.bat` batch file | `execute.bat` | `RTID.bat` |
 | **NetExec** | `gen_random_string()` | Random string | `RTID` |
 
-The `random.choice`/`random.sample` hooks only fire for **artifact-creating** code (temp files, service names, AD objects). Network-level identifiers (SMB3 ClientGuid, TDS HostName/AppName, SMB server config) are left untouched so they don't create unnecessary fingerprints in packet captures.
+The `random.choice`/`random.sample` hooks only fire for **artifact-creating** code in actual Impacket files (temp files, service names, AD objects). Regular Python scripts are never affected — the hooks verify the caller is part of the Impacket package before patching. Network-level identifiers (SMB3 ClientGuid, TDS HostName/AppName, SMB server config) are left untouched so they don't create unnecessary fingerprints in packet captures.
 
 ## Supported Tools
 

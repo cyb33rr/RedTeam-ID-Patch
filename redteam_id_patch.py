@@ -4,13 +4,18 @@ Loaded via redteam_id_patch.pth at Python startup. Replaces all random/hardcoded
 forensic identifiers in Impacket and NetExec with the **full** RTID
 string (default: RedTeaming). Warns interactively when RTID is unset.
 
+Only activates for actual Impacket/NetExec code paths — regular Python scripts
+are never affected, even if they share a filename with an Impacket tool.
+
 Patched traces:
   - random.choice(string.ascii_letters) -> full IDENT on first iter, '' after
   - random.sample(string.ascii_letters, k) -> [IDENT] + [''] * (k-1)
-  - wmiexec OUTPUT_FILENAME (time.time based)
-  - dcomexec OUTPUT_FILENAME (__main__ overwrite after [:5] slice)
+  - wmiexec OUTPUT_FILENAME (__main__ overwrite)
+  - dcomexec OUTPUT_FILENAME (__main__ overwrite)
+  - smbexec OUTPUT_FILENAME (__main__ overwrite) + random service/batch names
+  - atexec random temp filenames
   - psexec RemCom pipe names
-  - secretsdump hardcoded __output / execute.bat
+  - secretsdump hardcoded __output / execute.bat + getFile/deleteFile paths
   - nxc gen_random_string() -> always full IDENT
   - nxc module artifacts (nanodump, handlekatz, procdump, pi, impersonate,
     msol, keepass_trigger) — binary/script filenames and output names
@@ -37,6 +42,8 @@ _ARTIFACT_FILES = frozenset({
     'ldapattack.py',     # AD computer/user account names
     'rpcattack.py',      # temp name
     'smbattack.py',      # AD computer account name
+    'smbexec.py',        # service name, batch file name
+    'atexec.py',         # temp file name
 })
 
 # NXC module artifact overrides: module_name -> (attr, option_key, default_val, suffix)
@@ -88,11 +95,13 @@ _orig_choice = random.choice
 
 def _hooked_choice(population):
     if population in _HOOKED_POPULATIONS:
-        caller_file = os.path.basename(sys._getframe(1).f_code.co_filename)
-        if caller_file not in _ARTIFACT_FILES:
+        caller_path = sys._getframe(1).f_code.co_filename
+        caller_file = os.path.basename(caller_path)
+        if caller_file not in _ARTIFACT_FILES or 'impacket' not in caller_path:
             return _orig_choice(population)
         if sys._getframe(2).f_code.co_name in _PASSTHROUGH_FUNCS:
             return _orig_choice(population)
+        _ensure_confirmed()
         frame = sys._getframe(1)
         idx = frame.f_locals.get('i', frame.f_locals.get('_', None))
         if isinstance(idx, int):
@@ -109,11 +118,13 @@ _orig_sample = random.sample
 
 def _hooked_sample(population, k, *args, **kwargs):
     if population in _HOOKED_POPULATIONS:
-        caller_file = os.path.basename(sys._getframe(1).f_code.co_filename)
-        if caller_file not in _ARTIFACT_FILES:
+        caller_path = sys._getframe(1).f_code.co_filename
+        caller_file = os.path.basename(caller_path)
+        if caller_file not in _ARTIFACT_FILES or 'impacket' not in caller_path:
             return _orig_sample(population, k, *args, **kwargs)
         if sys._getframe(2).f_code.co_name in _PASSTHROUGH_FUNCS:
             return _orig_sample(population, k, *args, **kwargs)
+        _ensure_confirmed()
         if k <= 0:
             return []
         return [IDENT] + [''] * (k - 1)
@@ -122,29 +133,16 @@ def _hooked_sample(population, k, *args, **kwargs):
 
 random.sample = _hooked_sample
 
-# ── Hook 3: wmiexec / dcomexec OUTPUT_FILENAME via time.time ─────────
+# ── Script detection ─────────────────────────────────────────────────
 _script = os.path.basename(sys.argv[0]) if sys.argv else ''
-
-if _script == 'wmiexec.py':
-    import time as _time_mod
-    _orig_time = _time_mod.time
-
-    class _IdentTime(float):
-        """Float subclass whose str()/repr() returns the ident string."""
-        def __str__(self):
-            _ensure_confirmed()
-            return IDENT
-        def __repr__(self):
-            _ensure_confirmed()
-            return IDENT
-
-    _time_mod.time = lambda: _IdentTime(_orig_time())
 
 
 # ── Post-import patch functions ───────────────────────────────────────
 
 def _patch_secretsdump(mod):
     """Patch RemoteOperations hardcoded __output and execute.bat.
+    Also wraps getFile/deleteFile on the SMB connection to fix hardcoded
+    'Temp\\__output' paths in __getLastVSS and saveNTDS.
     Returns True if patch applied, False if module not ready yet."""
     if not hasattr(mod, 'RemoteOperations'):
         return False
@@ -158,6 +156,26 @@ def _patch_secretsdump(mod):
         _orig_init(self, *a, **kw)
         self._RemoteOperations__batchFile = '%TEMP%\\' + IDENT + '.bat'
         self._RemoteOperations__output = '%SYSTEMROOT%\\Temp\\' + IDENT
+
+        # Fix hardcoded 'Temp\\__output' in getFile/deleteFile calls
+        # (secretsdump __getLastVSS/saveNTDS and smbattack run)
+        _conn = self._RemoteOperations__smbConnection
+        _real_getFile = _conn.getFile
+        _real_deleteFile = _conn.deleteFile
+        _patched_path = 'Temp\\' + IDENT
+
+        def _wrapped_getFile(shareName, path, *a2, **kw2):
+            if path == 'Temp\\__output':
+                path = _patched_path
+            return _real_getFile(shareName, path, *a2, **kw2)
+
+        def _wrapped_deleteFile(shareName, path, *a2, **kw2):
+            if path == 'Temp\\__output':
+                path = _patched_path
+            return _real_deleteFile(shareName, path, *a2, **kw2)
+
+        _conn.getFile = _wrapped_getFile
+        _conn.deleteFile = _wrapped_deleteFile
 
     _patched_init._rtid_patched = True
     mod.RemoteOperations.__init__ = _patched_init
@@ -273,19 +291,21 @@ def _patch_nxc_moduleloader(mod):
     return True
 
 
-# ── Hook 4: unified __import__ wrapper for all post-import patches ───
+# ── Hook 3: unified __import__ wrapper for all post-import patches ───
 _lib_patches = {
     'impacket.examples.secretsdump': _patch_secretsdump,
     'nxc.helpers.misc': _patch_nxc_misc,
     'nxc.loaders.moduleloader': _patch_nxc_moduleloader,
 }
 _psexec_done = _script != 'psexec.py'
+_wmiexec_done = _script != 'wmiexec.py'
 _dcomexec_done = _script != 'dcomexec.py'
+_smbexec_done = _script != 'smbexec.py'
 _orig_import = builtins.__import__
 
 
 def _master_import(name, *args, **kwargs):
-    global _psexec_done, _dcomexec_done
+    global _psexec_done, _wmiexec_done, _dcomexec_done, _smbexec_done
     result = _orig_import(name, *args, **kwargs)
 
     # Library module patches (secretsdump, nxc misc)
@@ -296,8 +316,11 @@ def _master_import(name, *args, **kwargs):
             if patch_fn(sys.modules[mod_name]):
                 _lib_patches.pop(mod_name, None)
 
+    # Script-specific patches — only fire when impacket is actually loaded
+    _impacket_loaded = 'impacket' in sys.modules
+
     # psexec RemCom pipe name patches
-    if not _psexec_done:
+    if not _psexec_done and _impacket_loaded:
         m = sys.modules.get('__main__')
         if m and hasattr(m, 'RemComSTDOUT'):
             _ensure_confirmed()
@@ -316,16 +339,33 @@ def _master_import(name, *args, **kwargs):
                 m.PSEXEC.openPipe = _patched_openPipe
             _psexec_done = True
 
-    # dcomexec OUTPUT_FILENAME patch (overwrite after [:5] truncation)
-    if not _dcomexec_done:
+    # wmiexec OUTPUT_FILENAME patch
+    if not _wmiexec_done and _impacket_loaded:
+        m = sys.modules.get('__main__')
+        if m and hasattr(m, 'OUTPUT_FILENAME'):
+            _ensure_confirmed()
+            m.OUTPUT_FILENAME = '__' + IDENT
+            _wmiexec_done = True
+
+    # dcomexec OUTPUT_FILENAME patch
+    if not _dcomexec_done and _impacket_loaded:
         m = sys.modules.get('__main__')
         if m and hasattr(m, 'OUTPUT_FILENAME'):
             _ensure_confirmed()
             m.OUTPUT_FILENAME = '__' + IDENT
             _dcomexec_done = True
 
+    # smbexec OUTPUT_FILENAME patch
+    if not _smbexec_done and _impacket_loaded:
+        m = sys.modules.get('__main__')
+        if m and hasattr(m, 'OUTPUT_FILENAME'):
+            _ensure_confirmed()
+            m.OUTPUT_FILENAME = IDENT
+            _smbexec_done = True
+
     # Uninstall wrapper once all patches are applied
-    if not _lib_patches and _psexec_done and _dcomexec_done:
+    if (not _lib_patches and _psexec_done and _wmiexec_done
+            and _dcomexec_done and _smbexec_done):
         builtins.__import__ = _orig_import
 
     return result
